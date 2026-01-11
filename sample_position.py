@@ -29,7 +29,7 @@ def view_frames_interactive(frames, omnipose_masks, refined_masks, edges=None):
             self.omni_masks = omni_masks
             self.refine_masks = refine_masks
             self.edges = edges
-            self.n_frames = len(frames)
+            self.n_frames = min(30, len(frames)) # view 30 frames
             self.current_idx = 0
             
             # Create figure
@@ -254,7 +254,7 @@ def single_position(position=None, is_treatment=False):
         return
     
     # Load frames and masks (let's use first 30 frames for quick demo)
-    n_frames = min(30, len(raw_files), len(mask_files))
+    n_frames = min(len(raw_files), len(mask_files))
     print(f"\nLoading first {n_frames} frames...")
     
     frames = [skimage.io.imread(f) for f in raw_files[:n_frames]]

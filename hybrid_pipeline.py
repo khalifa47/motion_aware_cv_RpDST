@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import os
 import pickle
 from typing import Tuple, List, Dict, Optional
+import config
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -297,24 +298,93 @@ class OpticalFlowAnalyzer:
     
     def extract_sequence_features(self, 
                                  frames: List[np.ndarray],
-                                 masks: List[np.ndarray]) -> List[Dict[str, float]]:
+                                 masks: List[np.ndarray],
+                                 robust_smoothing: bool = True) -> List[Dict[str, float]]:
         """
         Extract optical flow features for entire sequence.
+        With optional robust smoothing and outlier removal for noisy bacterial motion.
         
         Args:
             frames: List of frames
             masks: List of segmentation masks
+            robust_smoothing: Apply heavy smoothing + outlier removal (default True)
             
         Returns:
             features_list: List of feature dictionaries per frame pair
         """
         features_list = []
         
+        # Extract raw features
         for i in range(len(frames) - 1):
             features = self.compute_flow_features(frames[i], frames[i+1], masks[i])
             features_list.append(features)
         
+        # Apply robust smoothing if enabled
+        if robust_smoothing and len(features_list) > 0:
+            features_list = self._apply_robust_smoothing(features_list)
+        
         return features_list
+    
+    def _apply_robust_smoothing(self, features_list: List[Dict[str, float]]) -> List[Dict[str, float]]:
+        """
+        Apply heavy smoothing and outlier removal to optical flow features.
+        Addresses noise from segmentation artifacts and sub-pixel motion.
+        
+        Args:
+            features_list: Raw feature dictionaries
+            
+        Returns:
+            smoothed_features: Features with outliers removed and heavy smoothing applied
+        """
+        if len(features_list) < 10:
+            return features_list  # Not enough data to smooth
+        
+        # Extract magnitude values
+        magnitudes = np.array([f['mean_flow_magnitude'] for f in features_list])
+        
+        # Step 1: Remove outliers using 3-sigma rule
+        mean_mag = np.mean(magnitudes)
+        std_mag = np.std(magnitudes)
+        
+        # Replace outliers with mean (prevents spikes)
+        outlier_mask = np.abs(magnitudes - mean_mag) > 3 * std_mag
+        magnitudes_cleaned = magnitudes.copy()
+        magnitudes_cleaned[outlier_mask] = mean_mag
+        
+        n_outliers = np.sum(outlier_mask)
+        if n_outliers > 0:
+            print(f"  Removed {n_outliers} outliers from motion signal ({n_outliers/len(magnitudes)*100:.1f}%)")
+        
+        # Step 2: Apply heavy smoothing (moving average, window=10)
+        smooth_window = min(10, len(magnitudes_cleaned) // 5)  # Adaptive window
+        if smooth_window < 3:
+            smooth_window = 3
+        
+        magnitudes_smoothed = np.convolve(
+            magnitudes_cleaned,
+            np.ones(smooth_window) / smooth_window,
+            mode='valid'
+        )
+        
+        # Step 3: Reconstruct feature list with smoothed values
+        # Pad to match original length (or truncate)
+        padding = len(features_list) - len(magnitudes_smoothed)
+        if padding > 0:
+            # Pad at the end with last value
+            magnitudes_smoothed = np.concatenate([
+                magnitudes_smoothed,
+                np.full(padding, magnitudes_smoothed[-1])
+            ])
+        
+        # Create new feature list with smoothed magnitudes
+        smoothed_features = []
+        for i, feat in enumerate(features_list):
+            smoothed_feat = feat.copy()
+            smoothed_feat['mean_flow_magnitude'] = magnitudes_smoothed[i]
+            smoothed_feat['smoothed'] = True  # Flag to indicate processing
+            smoothed_features.append(smoothed_feat)
+        
+        return smoothed_features
 
 
 class GrowthAnalyzer:
@@ -356,6 +426,50 @@ class GrowthAnalyzer:
             areas[i] = n_pixels * self.pixel_area
         
         return areas
+    
+    def smooth_areas(self, areas: np.ndarray, window: int = 8) -> np.ndarray:
+        """
+        Smooth area measurements using exponential fitting to reduce segmentation noise.
+        Fits exponential curves to chunks and replaces outliers with fitted values.
+        Based on the reference implementation (Tran et al. 2025).
+        
+        Args:
+            areas: Raw area measurements
+            window: Size of fitting window (default 8 frames = 16 minutes)
+            
+        Returns:
+            smoothed: Smoothed area array with outliers replaced
+        """
+        def exp_fit(x, a, b):
+            return a * np.exp(b * x)
+        
+        smoothed = areas.copy()
+        
+        for i in range(0, len(areas), window):
+            chunk = areas[i:i+window]
+            if len(chunk) < 3:  # Need at least 3 points to fit
+                continue
+            
+            x = np.arange(len(chunk))
+            
+            try:
+                # Fit exponential to chunk
+                popt, _ = curve_fit(exp_fit, x, chunk, 
+                                   p0=[chunk[0], 0.001],
+                                   maxfev=5000)
+                fitted = exp_fit(x, *popt)
+                
+                # Replace outliers (>10% deviation from fit)
+                for j, val in enumerate(chunk):
+                    if fitted[j] > 0:  # Avoid division by zero
+                        rel_error = abs(val - fitted[j]) / fitted[j]
+                        if rel_error > 0.1:  # 10% threshold
+                            smoothed[i+j] = fitted[j]
+            except:
+                # If fit fails, keep original values
+                pass
+        
+        return smoothed
     
     def exponential_growth_fit(self, x: np.ndarray, a: float, b: float) -> np.ndarray:
         """Exponential growth model: a * exp(b * x)"""
@@ -409,6 +523,38 @@ class GrowthAnalyzer:
                                       mode='valid')
         
         return motion_rates
+    
+    def normalize_growth_rates(self, 
+                              treatment_rates: np.ndarray,
+                              reference_rates: np.ndarray) -> np.ndarray:
+        """
+        Normalize treatment growth rates to reference baseline.
+        Computes treatment/reference ratio to show relative change.
+        Based on the reference implementation (Tran et al. 2025).
+        
+        Args:
+            treatment_rates: Growth rates from treatment condition
+            reference_rates: Growth rates from reference condition
+            
+        Returns:
+            normalized: Treatment/reference ratio (1.0 = no change)
+        """
+        # Ensure same length
+        min_len = min(len(treatment_rates), len(reference_rates))
+        treat = treatment_rates[:min_len]
+        ref = reference_rates[:min_len]
+        
+        # Avoid division by zero and extreme outliers
+        normalized = np.zeros(min_len)
+        for i in range(min_len):
+            if abs(ref[i]) > 1e-6:  # Avoid near-zero denominators
+                ratio = treat[i] / ref[i]
+                # Clip extreme outliers (caused by noise)
+                normalized[i] = np.clip(ratio, 0.0, 3.0)
+            else:
+                normalized[i] = 1.0  # Default to no change
+        
+        return normalized
     
     def detect_divergence_time(self, 
                               ref_signal: np.ndarray,
@@ -497,7 +643,7 @@ def plot_growth_comparison(time_hours: np.ndarray,
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.show()
+    plt.close()
 
 
 def plot_motion_comparison(time_hours: np.ndarray,
@@ -540,8 +686,8 @@ def plot_motion_comparison(time_hours: np.ndarray,
     plt.grid(alpha=0.3)
     
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.show()
+        plt.savefig(save_path, dpi=config.DPI, bbox_inches='tight')
+    plt.close()
 
 
 # MAIN PIPELINE EXECUTION

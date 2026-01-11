@@ -9,6 +9,19 @@ import os
 # DATA PATHS
 # ============================================================================
 
+# # Base directory (update this to your data location)
+# BASE_DIR = "./data/test"
+
+# # Raw data directories
+# REF_RAW_DIR = os.path.join(BASE_DIR, "REF_raw_data111_130_for_testing")
+# REF_MASK_DIR = os.path.join(BASE_DIR, "REF_masks111_131_for_testing")
+# RIF10_RAW_DIR = os.path.join(BASE_DIR, "RIF10_raw_data211_217_for_testing")
+# RIF10_MASK_DIR = os.path.join(BASE_DIR, "RIF10_masks211_217_for_testing")
+
+# # Output directories
+# OUTPUT_DIR = os.path.join("test_results", "full_hybrid_output")
+# SAMPLE_OUTPUT_DIR = os.path.join("test_results", "sample_analysis_output")
+
 # Base directory (update this to your data location)
 BASE_DIR = "./data"
 
@@ -35,9 +48,12 @@ INTERVAL_MINUTES = 2.0  # Time between frames (minutes)
 PIXEL_SIZE_UM = 0.0733  # Pixel size at 150x magnification (μm/pixel)
 
 # Analysis parameters
-ROLLING_WINDOW = 16  # Window size for rolling growth rate (~30 min at 2 min intervals)
+ROLLING_WINDOW = 24  # Window size for rolling growth rate (~30 min at 2 min intervals)
 
 # Position ranges
+# REF_POSITIONS = list(range(111, 131))  # Reference positions (111-117)
+# RIF10_POSITIONS = list(range(211, 218))  # Treatment positions (211-217)
+
 REF_POSITIONS = list(range(101, 111))  # Reference positions (101-110)
 RIF10_POSITIONS = list(range(201, 221))  # Treatment positions (201-220)
 
@@ -50,7 +66,7 @@ RIF10_POSITIONS = list(range(201, 221))  # Treatment positions (201-220)
 GAUSSIAN_SIGMA = 1.0  # Standard deviation for Gaussian blur
 SOBEL_KSIZE = 3  # Kernel size for Sobel edge detection (must be odd)
 WATERSHED_MIN_DISTANCE = 5  # Minimum distance between watershed seeds
-USE_WATERSHED = True  # Whether to apply watershed refinement (False = trust Omnipose)
+USE_WATERSHED = False  # Whether to apply watershed refinement (False = trust Omnipose)
 USE_MEMORY = True  # Whether to use continuous memory mask
 
 # Optical flow parameters
